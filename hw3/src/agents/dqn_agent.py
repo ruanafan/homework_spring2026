@@ -48,10 +48,17 @@ class DQNAgent(nn.Module):
         observation = ptu.from_numpy(np.asarray(observation))[None]
 
         # TODO(Section 2.4): get the action from the critic using an epsilon-greedy strategy
-        action = None
+        if np.random.random() < epsilon:
+            # 使用 ptu.from_numpy 将 numpy int 转换为 tensor，确保一致性
+            action = ptu.from_numpy(np.array([np.random.randint(self.num_actions)]))
+        else:
+            qa_values = self.critic(observation)
+            # print("[get_action] qa value: ", qa_values)
+            action = qa_values.argmax(dim=-1)
+            
         # ENDTODO
-
-        return ptu.to_numpy(action).squeeze(0).item()
+        # print("[get_action] action: ", action)
+        return ptu.to_numpy(action).squeeze().item()
 
     def update_critic(
         self,
@@ -67,25 +74,33 @@ class DQNAgent(nn.Module):
         # Compute target values
         with torch.no_grad():
             # TODO(Section 2.4): compute target values
-            next_qa_values = None
+            # next_qa_values: 动作价值评估, 它表示在下一个状态 $s'$ 下，去评估当前所有可能动作能带来的期望总回报（Q 值）。
+            # next_qa_values一定由目标网络来估计
+            next_qa_values = self.target_critic(next_obs)
+            # print("[update_critic] next_qa_values", next_qa_values)
 
             if self.use_double_q:
                 # TODO(Section 2.5): implement double-Q target action selection
-                next_action = None
+                next_action = self.critic(next_obs).argmax(dim=-1)
             else:
-                next_action = None
+                next_action = next_qa_values.argmax(dim=-1)
 
-            next_q_values = None
+            # print("[update_critic] next_action", next_action, next_action.unsqueeze(1))
+            # 选了动作以后，从next_qa_values中根据next_action提取对应的qa_value作为next_q_value
+            next_q_values = next_qa_values.gather(1, next_action.unsqueeze(1)).squeeze(1)
+            # print("[update_critic] next_q_values", next_q_values)
             assert next_q_values.shape == (batch_size,), next_q_values.shape
 
-            target_values = None
+            target_values = reward + self.discount * next_q_values * (1 - done.float())
+            # print("[update_critic] target_values", target_values)
             assert target_values.shape == (batch_size,), target_values.shape
             # ENDTODO
 
         # TODO(Section 2.4): train the critic with the target values
-        qa_values = None
-        q_values = None
-        loss = None
+        qa_values = self.critic(obs)
+        # 根据sample里的action提取当前预测对应动作的q值
+        q_values = qa_values.gather(1, action.unsqueeze(1)).squeeze(1)
+        loss = self.critic_loss(q_values, target_values)
         # ENDTODO
 
         self.critic_optimizer.zero_grad()
@@ -120,8 +135,9 @@ class DQNAgent(nn.Module):
         Update the DQN agent, including both the critic and target.
         """
         # TODO(Section 2.4): update the critic, and the target if needed
-        critic_stats = None
-        # Hint: if step % self.target_update_period == 0: ...
+        critic_stats = self.update_critic(obs, action, reward, next_obs, done)
+        if step % self.target_update_period == 0:
+            self.update_target_critic()
         # ENDTODO
 
         return critic_stats
