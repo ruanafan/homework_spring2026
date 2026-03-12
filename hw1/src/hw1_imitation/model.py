@@ -6,7 +6,8 @@ import abc
 from typing import Literal, TypeAlias
 
 import torch
-from torch import nn
+import torch.nn as nn
+from torch.nn.functional import mse_loss
 
 
 class BasePolicy(nn.Module, metaclass=abc.ABCMeta):
@@ -46,13 +47,23 @@ class MSEPolicy(BasePolicy):
         hidden_dims: tuple[int, ...] = (128, 128),
     ) -> None:
         super().__init__(state_dim, action_dim, chunk_size)
+        layers = []
+        in_size = state_dim
+        for h in hidden_dims:
+            layers.append(nn.Linear(in_size, h))
+            layers.append(nn.ReLU())
+            in_size = h
+        layers.append(nn.Linear(in_size, action_dim * chunk_size))
+        self.model = nn.Sequential(*layers)
+
 
     def compute_loss(
         self,
         state: torch.Tensor,
         action_chunk: torch.Tensor,
     ) -> torch.Tensor:
-        raise NotImplementedError
+        pred_chunk = self.sample_actions(state)
+        return mse_loss(pred_chunk, action_chunk)
 
     def sample_actions(
         self,
@@ -60,7 +71,9 @@ class MSEPolicy(BasePolicy):
         *,
         num_steps: int = 10,
     ) -> torch.Tensor:
-        raise NotImplementedError
+        actions = self.model.forward(state)
+        return actions.reshape(-1, self.chunk_size, self.action_dim)
+        
 
 
 class FlowMatchingPolicy(BasePolicy):

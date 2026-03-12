@@ -214,4 +214,4 @@ def evaluate_policy(
     for idx, video in enumerate(videos):
         log_data[f"eval/rollout_ep{idx}"] = video
     logger.log(log_data, step=step)
-    log_checkpoint_artifact(model, step=step)
+    # log_checkpoint_artifact(model, step=step)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ssl
 import urllib.request
 import zipfile
 from dataclasses import dataclass
@@ -60,7 +61,11 @@ def download_pusht(dataset_dir: Path) -> Path:
 
     zip_path = dataset_dir / "pusht.zip"
     if not zip_path.exists():
-        urllib.request.urlretrieve(PUSHT_URL, zip_path)
+        ssl_ctx = ssl.create_default_context()
+        ssl_ctx.check_hostname = False
+        ssl_ctx.verify_mode = ssl.CERT_NONE
+        with urllib.request.urlopen(PUSHT_URL, context=ssl_ctx) as resp, open(zip_path, "wb") as f:
+            f.write(resp.read())
 
     with zipfile.ZipFile(zip_path, "r") as zip_ref:
         zip_ref.extractall(dataset_dir)

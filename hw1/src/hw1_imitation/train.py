@@ -1,7 +1,7 @@
 """Train and evaluate a Push-T imitation policy."""
 
 from __future__ import annotations
-
+from itertools import cycle
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -11,7 +11,10 @@ import numpy as np
 import torch
 import tyro
 import wandb
+from tqdm import tqdm
 from torch.utils.data import DataLoader
+from torch.optim import Adam
+
 
 from hw1_imitation.data import (
     Normalizer,
@@ -20,7 +23,7 @@ from hw1_imitation.data import (
     load_pusht_zarr,
 )
 from hw1_imitation.model import build_policy, PolicyType
-from hw1_imitation.evaluation import Logger
+from hw1_imitation.evaluation import Logger, evaluate_policy
 
 LOGDIR_PREFIX = "exp"
 
@@ -75,6 +78,7 @@ def parse_train_config(
 def set_seed(seed: int) -> None:
     np.random.seed(seed)
     torch.manual_seed(seed)
+    torch.mps.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
 
@@ -88,7 +92,13 @@ def config_to_dict(config: TrainConfig) -> dict[str, Any]:
 
 def run_training(config: TrainConfig) -> None:
     set_seed(config.seed)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
     print(f"Using device: {device}")
 
     zarr_path = download_pusht(config.data_dir)
@@ -117,6 +127,9 @@ def run_training(config: TrainConfig) -> None:
         chunk_size=config.chunk_size,
         hidden_dims=config.hidden_dims,
     ).to(device)
+    model = torch.compile(model)
+
+    optimizer = Adam(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
 
     exp_name = f"seed_{config.seed}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     if config.exp_name is not None:
@@ -128,6 +141,42 @@ def run_training(config: TrainConfig) -> None:
     logger = Logger(log_dir)
 
     ### TODO: PUT YOUR MAIN TRAINING LOOP HERE ###
+    total_steps = config.num_epochs * len(loader)
+    step = 0
+    pbar = tqdm(total=total_steps, desc="Training")
+    for epoch in range(config.num_epochs):
+        for states, actions in loader:
+            states = states.to(device)
+            actions = actions.to(device)
+
+            model.train()
+            loss = model.compute_loss(states, actions)
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            pbar.set_postfix(epoch=epoch, loss=f"{loss.item():.4f}")
+            pbar.update(1)
+
+            if step > 0 and step % config.log_interval == 0:
+                logger.log({"loss": loss.item()}, step=step)
+
+            if step > 0 and step % config.eval_interval == 0:
+                evaluate_policy(
+                    model,
+                    normalizer,
+                    torch.device("mps:0"),
+                    config.chunk_size,
+                    config.video_size,
+                    config.num_video_episodes,
+                    config.flow_num_steps,
+                    step,
+                    logger,
+                )
+            
+            step += 1
+    pbar.close()
 
     logger.dump_for_grading()
 
